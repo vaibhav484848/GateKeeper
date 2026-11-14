@@ -3,6 +3,7 @@ package com.vaibhav.gatekeeper.management.service;
 import com.vaibhav.gatekeeper.management.dto.requestDto.OrganizationRequest;
 import com.vaibhav.gatekeeper.management.dto.requestDto.OrganizationStatusRequest;
 import com.vaibhav.gatekeeper.management.dto.requestDto.TenantAdminRequest;
+import com.vaibhav.gatekeeper.management.dto.requestDto.TenantOrganizationRequest;
 import com.vaibhav.gatekeeper.management.dto.responseDto.OrganizationResponse;
 import com.vaibhav.gatekeeper.management.dto.responseDto.TenantAdminResponse;
 import com.vaibhav.gatekeeper.management.entity.ManagementUser;
@@ -29,14 +30,20 @@ public class OrganisationService {
     private final ManagementUserRepository managementUserRepository;
     private final RoleRepository roleRepository;
     private final PasswordEncoder passwordEncoder;
+    private final TenantContext tenantContext;
+    private final AuditService auditService;
 
     public OrganisationService(OrganizationRepository organizationRepository,
                                ManagementUserRepository managementUserRepository,
-                               RoleRepository roleRepository, PasswordEncoder passwordEncoder) {
+                               RoleRepository roleRepository, PasswordEncoder passwordEncoder,
+                               TenantContext tenantContext,
+                               AuditService auditService) {
         this.organizationRepository = organizationRepository;
         this.managementUserRepository = managementUserRepository;
         this.roleRepository = roleRepository;
         this.passwordEncoder = passwordEncoder;
+        this.tenantContext = tenantContext;
+        this.auditService = auditService;
     }
 
     @Transactional
@@ -184,6 +191,33 @@ public class OrganisationService {
         return managementUserRepository.findByOrganizationId(organizationId)
                 .orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND, "Tenant administrator not found"));
     }
+
+    @Transactional(readOnly = true)
+    public OrganizationResponse getOwnOrganization() {
+        return OrganizationResponse.from(tenantContext.getOrganization());
+    }
+
+    @Transactional
+    public OrganizationResponse updateOwnOrganization(TenantOrganizationRequest request) {
+        long startedAt = System.nanoTime();
+
+        Organization organization = tenantContext.getOrganization();
+
+        if(!organization.getName().equalsIgnoreCase(request.getName())
+                && organizationRepository.existsByNameIgnoreCase(request.getName())) {
+            throw new ApiException(HttpStatus.CONFLICT, "Organization name already exists");
+        }
+
+        organization.setName(request.getName());
+        organization.setUpdatedAt(LocalDateTime.now());
+
+        auditService.record(organization, "UPDATE_OWN_ORGANIZATION",
+                "ORGANIZATION", organization.getId().toString(), startedAt,
+                "Tenant updated its organization name");
+
+        return OrganizationResponse.from(organization);
+    }
+
 
     private Organization getOrganization(Long id) {
         return organizationRepository.findByIdAndStatusNot(id, OrganizationStatus.DELETED)
